@@ -1,0 +1,211 @@
+---
+title: "Spyros Protoulis for GameJolt - Data Analyst"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r}
+library(tidyverse)
+library(corrplot)
+```
+
+
+```{r}
+#create dummy data
+
+set.seed(99)
+user_ids_list=1:2000
+sources_acq_list=c('google_ads','unknown','tiktok','google_organic_search','direct')
+sessions_df = data.frame(user_id=sample(user_ids_list,1000,replace=TRUE)
+                    , source_acquisition=sample(sources_acq_list,1000,replace=TRUE)
+                    ,session_length_sec = rnorm(n = 1000, mean = 360.5, sd = 45.33 )
+                    ,engage_item = floor(runif(1000, min = 0, max = 10))
+                    ,likes = floor(runif(1000, min = 0, max = 4))
+                    ,created_content = floor(runif(1000, min = 0, max = 2)
+                                             )
+                    )
+
+
+sessions_grp_user = sessions_df %>%
+  group_by(user_id, source_acquisition) %>%
+  summarize(number_of_sessions = n()
+            , total_session_length_sec = sum(session_length_sec)
+            , total_engagement_item = sum(engage_item)
+            , total_likes = sum(likes)
+            , total_created_content = sum(created_content)
+            ) %>%
+  arrange(desc(number_of_sessions))
+
+sessions_grp_user2 = sessions_grp_user %>%
+  mutate(likes_per_hour = total_likes / (total_session_length_sec/3600)
+            , eng_per_hour = total_engagement_item / (total_session_length_sec/3600) #convert to hour
+           
+           )
+
+```
+
+```{r}
+glimpse(sessions_grp_user2)
+head(sessions_grp_user2)
+```
+
+
+
+```{r}
+summary(sessions_grp_user2)
+```
+
+
+```{r}
+sessions_for_cor = sessions_grp_user2 %>%
+  select(-c(source_acquisition,user_id))
+  
+M = cor(sessions_for_cor)
+corrplot(M, method = 'number') # colorful number
+
+```
+
+
+```{r}
+source_grp = sessions_grp_user2 %>%
+  group_by(source_acquisition) %>%
+  summarise(number_of_users= n()
+            ,session_hours_per_user = sum(total_session_length_sec) / number_of_users
+            , likes_per_user = sum(total_likes) / number_of_users
+            , likes_per_user = sum(total_engagement_item) / number_of_users
+
+            )
+```
+
+
+
+Content type: Picture, video, length of video, video tags:[funny, skill], game_id, creator_id
+
+Hypotheses: 
+1. Do users from different sources (google ads vs tiktok ads) become more valuable in ad clicks? more valuable in creating content?
+
+```{r}
+google_likes=sessions_df %>%
+  filter(source_acquisition == 'google_ads') %>%
+  select(likes)
+
+manipulated_likes = google_likes*1.1
+
+
+tiktok_likes=sessions_df %>%
+  filter(source_acquisition == 'tiktok') %>%
+  select(likes)
+
+t.test(google_likes, tiktok_likes )
+```
+```{r}
+t.test(google_likes, manipulated_likes )
+```
+Now, in a scientific context or for a sensitive decision, we would probably not be able to rely upon this, with p=0.166 (16% chance we got the result at random)
+
+But, in business we can afford to take more risk than in science, so to an extent we can rely on this.
+
+
+Similar practice for A/B testing: does version A or version B have significantly higher session lengths?
+
+
+```{r}
+ggplot(sessions_grp_user2, aes(x=total_session_length_sec  , y=total_engagement_item)) +
+    geom_point() +
+    geom_smooth(method=lm)
+```
+
+
+Push notifications: A/B/C test
+Group A got a notification 24 hours after last activity
+Group B got a notification 48 hours after last activity
+Group C got a notification 24 h after last activity AND 48 hours after last activity, if they still hadn't been active
+
+
+Data:
+-Last activity before 1st notification
+-Blocked our notifications! =--how annoying are we being?
+
+
+```{r}
+library(lubridate)
+set.seed(99)
+
+#create dummy data
+user_ids_list = 1:3000
+test_group = rep(c('a', 'b', 'c'), each = 1000)
+tapped_listA = rbinom(1000, 1, prob =  0.3)
+tapped_listB = rbinom(1000, 1, prob =  0.26)
+tapped_listC1 = rbinom(1000, 1, prob =  0.32)
+tapped_listC2 = case_when()
+
+block_listA = rbinom(1000, 1, prob =  0.2)
+block_listB = rbinom(1000, 1, prob =  0.16)
+block_listC = rbinom(1000, 1, prob =  0.28)
+
+
+notif_df = data.frame(
+  user_id = user_ids_list,
+  test_group = test_group,
+  tap1st = c(tapped_listA, tapped_listB, tapped_listC1),
+  tap2nd = c(rep(NA, 2000), tapped_listC2),
+  blocked = c(block_listA, block_listB, block_listC)
+)
+
+notif_df2 = notif_df %>%
+  mutate(tap2nd = case_when(
+    tap1st == 0 &
+      test_group == 'c' ~ sample(0:1, n(), replace = TRUE, prob = c(0.88, 0.12))#88% chance not to tap
+  ))
+
+
+```
+
+
+We have two outcomes to measure: 
+1. did they tap the notification
+2. did they block notifications completely
+
+
+```{r}
+notif_df2 = notif_df2 %>%
+  mutate(total_taps = coalesce(tap1st, 0) + coalesce(tap2nd, 0))
+
+grp_A = notif_df2 %>% filter(test_group == 'a')
+grp_B = notif_df2 %>% filter(test_group == 'b')
+grp_C = notif_df2 %>% filter(test_group == 'c')
+
+#ANOVA is probably better than multiple t tests
+
+t.test(grp_A$tap1st, grp_B$tap1st)
+```
+
+A (24h after inactivity) taps more than B (48h after inactivity)
+
+```{r}
+
+t.test(grp_A$tap1st, grp_C$total_taps)
+
+```
+
+```{r}
+t.test(grp_B$tap1st, grp_C$total_taps)
+```
+
+
+
+```{r}
+t.test(grp_A$blocked, grp_B$blocked)
+```
+
+
+```{r}
+t.test(grp_B$blocked, grp_C$blocked)
+```
+```{r}
+t.test(grp_A$blocked, grp_C$blocked)
+```
+
+Block rates: C=28.5% > A=19.6% > B=15.5%
